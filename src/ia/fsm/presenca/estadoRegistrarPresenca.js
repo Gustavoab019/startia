@@ -1,4 +1,5 @@
 const { verificarStatusPresenca, registrarEntrada, registrarSaida } = require('../../../domains/presenca/presenca.service');
+const { templates } = require('../../../utils/mensagensConfirmacao');
 
 /**
  * Handler para estado de registro de presença
@@ -8,12 +9,22 @@ const { verificarStatusPresenca, registrarEntrada, registrarSaida } = require('.
  * @returns {Promise<Object>} Resposta e próximo estado
  */
 async function estadoRegistrarPresenca(colaborador, mensagemTexto, obra = null) {
+  // Obter nome do colaborador para personalização
+  const nomeColaborador = colaborador.nome ? `${colaborador.nome}` : '';
+  
   // Se não tem obra selecionada, verificar situação das obras do colaborador
   if (!obra) {
     // Verificar se colaborador tem obras associadas
     if (!colaborador.obras || colaborador.obras.length === 0) {
       return {
-        resposta: "Você não está associado a nenhuma obra. Por favor, entre em uma obra primeiro.",
+        resposta: `❌ ACESSO INDISPONÍVEL
+
+${nomeColaborador ? `Olá, ${nomeColaborador}!` : 'Olá!'} 
+Você ainda não está vinculado a nenhuma obra.
+
+Para acessar essa função:
+1️⃣ Crie uma obra (digite "1")
+2️⃣ Entre em uma obra existente (digite "2")`,
         proximoEstado: 'menu'
       };
     }
@@ -26,7 +37,15 @@ async function estadoRegistrarPresenca(colaborador, mensagemTexto, obra = null) 
     
     // Caso tenha múltiplas obras, pedir para selecionar
     return {
-      resposta: "Você precisa selecionar uma obra primeiro para registrar presença.",
+      resposta: `⚠️ MÚLTIPLAS OBRAS ENCONTRADAS
+
+${nomeColaborador ? `Olá, ${nomeColaborador}!` : 'Olá!'} 
+Você está vinculado a várias obras.
+
+Como proceder:
+1. Volte ao menu principal (digite "menu")
+2. Selecione a opção 2️⃣ para escolher uma obra específica
+3. Depois acesse a opção 4️⃣ novamente`,
       proximoEstado: 'menu'
     };
   }
@@ -58,6 +77,23 @@ async function handleRegistroPresenca(colaborador, mensagemTexto, obraId) {
     // Verificar status atual de presença
     const status = await verificarStatusPresenca(colaborador._id, obraId);
     
+    // Obter nome do colaborador para personalização
+    const nomeColaborador = colaborador.nome ? `${colaborador.nome}` : '';
+    
+    // Obter nome da obra se possível
+    let nomeObra = "";
+    if (obraId) {
+      try {
+        const Obra = require('../../../domains/obra/obra.model');
+        const obraEncontrada = await Obra.findById(obraId);
+        if (obraEncontrada) {
+          nomeObra = obraEncontrada.nome;
+        }
+      } catch (error) {
+        console.error('Erro ao buscar nome da obra:', error);
+      }
+    }
+    
     // Normalizar mensagem para processamento
     const comando = mensagemTexto.toLowerCase().trim();
     
@@ -66,8 +102,8 @@ async function handleRegistroPresenca(colaborador, mensagemTexto, obraId) {
         comando.includes('como estou') ||
         comando === '?') {
       return {
-        resposta: formatarRespostaStatus(status),
-        proximoEstado: 'menu'
+        resposta: formatarRespostaStatus(status, nomeObra, nomeColaborador),
+        proximoEstado: 'registrando_presenca'
       };
     }
     
@@ -85,13 +121,38 @@ async function handleRegistroPresenca(colaborador, mensagemTexto, obraId) {
       
       if (!resultado.sucesso) {
         return {
-          resposta: `❌ ${resultado.mensagem}`,
+          resposta: `❌ OPERAÇÃO NÃO REALIZADA
+
+Não foi possível registrar sua entrada: ${resultado.mensagem}
+
+Por favor, tente novamente ou contate o administrador.
+Digite qualquer tecla para voltar ao menu.`,
           proximoEstado: 'menu'
         };
       }
       
+      const horaAtual = obterHoraAtual();
+      
+      // Usar template de mensagem de confirmação
+      if (templates && templates.presencaRegistrada) {
+        const mensagemEntrada = templates.presencaRegistrada('entrada', horaAtual);
+        return {
+          resposta: `${mensagemEntrada}\n\n🏗️ Obra: ${nomeObra || "Obra atual"}\n\n${nomeColaborador ? `Bom trabalho, ${nomeColaborador}!` : 'Bom trabalho!'} Lembre-se de registrar sua saída quando terminar o expediente.`,
+          proximoEstado: 'menu'
+        };
+      }
+      
+      // Fallback caso o template não esteja disponível
       return {
-        resposta: `✅ Entrada registrada com sucesso às ${obterHoraAtual()}! Bom trabalho! Quando terminar seu expediente, envie 'saída' para registrar sua saída.`,
+        resposta: `✅ ENTRADA REGISTRADA COM SUCESSO!
+⏰ Hora de início: ${horaAtual}
+🏗️ Obra: ${nomeObra || "Obra atual"}
+
+${nomeColaborador ? `Bom trabalho, ${nomeColaborador}!` : 'Bom trabalho!'} 
+
+Quando terminar seu expediente, volte ao menu principal e selecione a opção 4 para registrar sua saída.
+
+👉 Dica: você pode ver suas tarefas digitando "3" no menu principal.`,
         proximoEstado: 'menu'
       };
     }
@@ -102,16 +163,40 @@ async function handleRegistroPresenca(colaborador, mensagemTexto, obraId) {
       
       if (!resultado.sucesso) {
         return {
-          resposta: `❌ ${resultado.mensagem}`,
+          resposta: `❌ OPERAÇÃO NÃO REALIZADA
+
+Não foi possível registrar sua saída: ${resultado.mensagem}
+
+Por favor, tente novamente ou contate o administrador.
+Digite qualquer tecla para voltar ao menu.`,
           proximoEstado: 'menu'
         };
       }
       
       // Formatar horas trabalhadas com precisão de 2 casas decimais
       const horasFormatadas = resultado.horasTrabalhadas.toFixed(2);
+      const horaAtual = obterHoraAtual();
       
+      // Usar template de mensagem de confirmação
+      if (templates && templates.presencaRegistrada) {
+        const mensagemSaida = templates.presencaRegistrada('saida', horaAtual, `${horasFormatadas}h${resultado.descontoAlmoco ? ' (com desconto de almoço)' : ''}`);
+        return {
+          resposta: `${mensagemSaida}\n\n🏗️ Obra: ${nomeObra || "Obra atual"}\n\n${nomeColaborador ? `Obrigado pelo seu trabalho hoje, ${nomeColaborador}!` : 'Obrigado pelo seu trabalho hoje!'} Descanse bem.`,
+          proximoEstado: 'menu'
+        };
+      }
+      
+      // Fallback caso o template não esteja disponível
       return {
-        resposta: `✅ Saída registrada com sucesso às ${obterHoraAtual()}! Você trabalhou ${horasFormatadas} horas hoje.${resultado.descontoAlmoco ? ' (com desconto de almoço)' : ''}`,
+        resposta: `✅ EXPEDIENTE FINALIZADO!
+
+Resumo do seu dia:
+⏰ Entrada: ${formatarHora(status.horaEntrada)} - Saída: ${horaAtual}
+⏱️ Total de horas: ${horasFormatadas} horas trabalhadas${resultado.descontoAlmoco ? ' (com desconto de almoço)' : ''}
+🏗️ Obra: ${nomeObra || "Obra atual"}
+
+${nomeColaborador ? `Obrigado pelo seu trabalho hoje, ${nomeColaborador}!` : 'Obrigado pelo seu trabalho hoje!'} Descanse bem.
+Digite qualquer tecla para voltar ao menu principal.`,
         proximoEstado: 'menu'
       };
     }
@@ -119,42 +204,85 @@ async function handleRegistroPresenca(colaborador, mensagemTexto, obraId) {
     // Se solicitou menu, voltar para o menu
     if (comando === '0' || comando === 'menu' || comando === 'voltar') {
       return {
-        resposta: "Voltando ao menu principal...",
+        resposta: "🔙 Voltando ao menu principal...",
         proximoEstado: 'menu'
       };
     }
     
     // Se nenhum comando foi reconhecido, mostrar opções
     return {
-      resposta: formatarMenuPresenca(status),
+      resposta: formatarMenuPresenca(status, nomeObra, nomeColaborador),
       proximoEstado: 'registrando_presenca'
     };
   } catch (error) {
     console.error('❌ Erro ao registrar presença:', error);
     return {
-      resposta: `❌ Não foi possível processar seu pedido: ${error.message}`,
+      resposta: `❌ ERRO INESPERADO
+
+Ops! Ocorreu um erro: ${error.message}
+
+Por favor, tente novamente ou contate o suporte.
+Digite qualquer tecla para voltar ao menu principal.`,
       proximoEstado: 'menu'
     };
   }
 }
 
 /**
+ * Formata hora para exibição
+ * @param {Date} data - Data a ser formatada
+ * @returns {String} Hora formatada
+ */
+function formatarHora(data) {
+  if (!data) return "--:--";
+  
+  const d = new Date(data);
+  return d.toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+/**
  * Formata resposta de status
  * @param {Object} status - Objeto de status de presença
+ * @param {String} nomeObra - Nome da obra
+ * @param {String} nomeColaborador - Nome do colaborador
  * @returns {String} Mensagem formatada
  */
-function formatarRespostaStatus(status) {
+function formatarRespostaStatus(status, nomeObra, nomeColaborador) {
+  const saudacao = nomeColaborador ? `${nomeColaborador}` : '';
+  
   if (!status.presente) {
-    return "📝 Você ainda não registrou presença hoje. Envie 'entrada' para registrar sua chegada.";
+    return `📊 SEU STATUS ATUAL ${saudacao ? `(${saudacao})` : ''}:
+
+❌ Você ainda não registrou entrada hoje
+🏗️ Obra: ${nomeObra || "Obra atual"}
+
+Para iniciar seu expediente, digite "1" para registrar entrada.`;
   }
   
   if (status.status === 'trabalhando') {
     const horasFormatadas = status.horasPassadas.toFixed(1);
-    return `⏱️ Você está na obra há ${horasFormatadas} horas. Envie 'saída' quando terminar seu expediente.`;
+    return `📊 SEU STATUS ATUAL ${saudacao ? `(${saudacao})` : ''}:
+
+✅ Você está TRABALHANDO agora
+⏰ Entrada registrada: ${formatarHora(status.horaEntrada)} (há ${horasFormatadas} horas)
+🏗️ Obra: ${nomeObra || "Obra atual"}
+
+Para registrar sua saída, digite "2".`;
   }
   
   if (status.status === 'concluido') {
-    return `✅ Você já concluiu seu expediente hoje. Trabalhou ${status.horasTrabalhadas} horas.`;
+    return `📊 SEU STATUS ATUAL ${saudacao ? `(${saudacao})` : ''}:
+
+✅ Você já encerrou seu expediente hoje
+⏰ Entrada: ${formatarHora(status.horaEntrada)} 
+⏰ Saída: ${formatarHora(status.horaSaida)}
+⏱️ Total trabalhado: ${status.horasTrabalhadas} horas
+🏗️ Obra: ${nomeObra || "Obra atual"}
+
+Bom descanso! Até amanhã.`;
   }
   
   return "Status desconhecido. Entre em contato com o suporte.";
@@ -163,28 +291,47 @@ function formatarRespostaStatus(status) {
 /**
  * Formata menu de opções de presença
  * @param {Object} status - Objeto de status de presença
+ * @param {String} nomeObra - Nome da obra
+ * @param {String} nomeColaborador - Nome do colaborador
  * @returns {String} Menu formatado
  */
-function formatarMenuPresenca(status) {
+function formatarMenuPresenca(status, nomeObra, nomeColaborador) {
+  const saudacao = nomeColaborador ? `Olá, ${nomeColaborador}!` : '';
+  const obraTxt = nomeObra ? `\n🏗️ Obra: ${nomeObra}` : '';
+  
   if (!status.presente) {
-    return "📝 *Registro de Presença*\n\n" +
-           "Você ainda não registrou presença hoje.\n\n" +
-           "1. Registrar entrada\n" +
-           "0. Voltar ao menu principal";
+    return `📝 REGISTRO DE PRESENÇA${obraTxt}
+${saudacao ? `\n${saudacao}` : ''}
+
+Você ainda não registrou presença hoje.
+
+1️⃣ Registrar ENTRADA agora (início de expediente)
+0️⃣ Voltar ao menu principal
+
+Digite "status" a qualquer momento para verificar sua situação.`;
   }
   
   if (status.status === 'trabalhando') {
     const horasFormatadas = status.horasPassadas.toFixed(1);
-    return "📝 *Registro de Presença*\n\n" +
-           `Você está na obra há ${horasFormatadas} horas.\n\n` +
-           "2. Registrar saída\n" +
-           "0. Voltar ao menu principal";
+    return `📝 REGISTRO DE PRESENÇA${obraTxt}
+${saudacao ? `\n${saudacao}` : ''}
+
+✅ Você está trabalhando há ${horasFormatadas} horas 
+   (entrada às ${formatarHora(status.horaEntrada)})
+
+2️⃣ Registrar SAÍDA agora (fim de expediente)
+0️⃣ Voltar ao menu principal`;
   }
   
   if (status.status === 'concluido') {
-    return "📝 *Registro de Presença*\n\n" +
-           `Você já concluiu seu expediente hoje. Trabalhou ${status.horasTrabalhadas} horas.\n\n` +
-           "0. Voltar ao menu principal";
+    return `📝 REGISTRO DE PRESENÇA${obraTxt}
+${saudacao ? `\n${saudacao}` : ''}
+
+✅ Você já concluiu seu expediente hoje!
+⏱️ Total trabalhado: ${status.horasTrabalhadas} horas
+   (entrada: ${formatarHora(status.horaEntrada)}, saída: ${formatarHora(status.horaSaida)})
+
+0️⃣ Voltar ao menu principal`;
   }
   
   return "Status desconhecido. Entre em contato com o suporte.";

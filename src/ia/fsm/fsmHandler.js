@@ -1,4 +1,4 @@
-// src/ia/fsm/fsmHandler.js
+// src/ia/fsm/fsmHandler.js - VERSÃO COMPLETA COM CORREÇÃO DE NOME
 
 const mongoose = require('mongoose');
 const estadoMenu = require('./estadoMenu');
@@ -14,12 +14,20 @@ const estadoGuiaStartIA = require('./colaborador/estadoGuiaStartIA');
 // Imports para problemas
 const estadoRelatandoProblema = require('./problema/estadoRelatandoProblema');
 const estadoVerProblemas = require('./problema/estadoVerProblemas');
-// Novo import para detalhes da tarefa
+// Import para detalhes da tarefa
 const estadoVerTarefaDetalhe = require('./tarefa/estadoVerTarefaDetalhe');
 
-// Novos imports
+// Imports dos utilitários
 const { gerarResumoContextual } = require('../../utils/gerarResumoContextual');
 const { gerarAjudaContextual } = require('../../utils/ajudaContextual');
+
+// ✅ IMPORTS DO SERVICE DE COLABORADOR ATUALIZADO
+const { 
+  obterSaudacao, 
+  obterNomeExibicao, 
+  precisaDefinirNome,
+  definirNomeColaborador 
+} = require('../../domains/colaborador/colaborador.service');
 
 async function fsmResponder(colaborador, mensagem, contexto) {
   // Garantir que mensagem seja uma string, independente do formato recebido
@@ -40,7 +48,12 @@ async function fsmResponder(colaborador, mensagem, contexto) {
   const comando = mensagemTexto.trim().toLowerCase();
   console.log(`🔍 Comando processado: "${comando}"`);
 
-  // NOVO: Verificar comandos globais
+  // ✅ USAR FUNÇÃO DO SERVICE PARA SAUDAÇÃO
+  const saudacao = obterSaudacao(colaborador);
+  const nomeExibicao = obterNomeExibicao(colaborador);
+
+  // ===== COMANDOS GLOBAIS =====
+  
   // 1. Comando de ajuda
   if (['ajuda', 'help', '?'].includes(comando)) {
     return {
@@ -53,25 +66,65 @@ async function fsmResponder(colaborador, mensagem, contexto) {
   if (['status', 'onde estou', 'contexto'].includes(comando)) {
     const resumoContextual = await gerarResumoContextual(colaborador);
     return {
-      resposta: `📱 *Seu Status Atual:*\n\n${resumoContextual}`,
+      resposta: `📱 *SEU STATUS ATUAL:*
+
+${resumoContextual}
+
+💡 Digite "ajuda" para ver os comandos disponíveis.`,
       etapaNova: colaborador.etapaCadastro // Mantém o estado atual
     };
   }
   
-  // 3. Verificar cancelamento de fluxos
+  // ✅ 3. COMANDO PARA ATUALIZAR NOME
+  if (comando.startsWith('meu nome é ') || comando.startsWith('nome ')) {
+    const novoNome = comando.replace(/^(meu nome é |nome )/i, '').trim();
+    
+    if (novoNome.length >= 2) {
+      try {
+        await definirNomeColaborador(colaborador._id, novoNome);
+        
+        return {
+          resposta: `✅ *NOME ATUALIZADO COM SUCESSO!*
+
+Agora você é: *${novoNome}*
+
+Digite "menu" para continuar ou qualquer outra opção.`,
+          etapaNova: colaborador.etapaCadastro
+        };
+      } catch (error) {
+        console.error('❌ Erro ao atualizar nome:', error);
+        return {
+          resposta: `❌ Erro ao atualizar nome. Tente novamente.
+
+💡 Use: "meu nome é João Silva"`,
+          etapaNova: colaborador.etapaCadastro
+        };
+      }
+    } else {
+      return {
+        resposta: `⚠️ Nome deve ter pelo menos 2 caracteres.
+
+💡 Use: "meu nome é João Silva"`,
+        etapaNova: colaborador.etapaCadastro
+      };
+    }
+  }
+  
+  // 4. Verificar cancelamento de fluxos
   if (['cancelar', 'cancel'].includes(comando)) {
-    // Apenas estados que fazem parte de um fluxo que pode ser cancelado
+    // Estados que fazem parte de um fluxo que pode ser cancelado
     const estadosFluxo = [
       'criando_obra_nome', 'criando_obra_endereco', 'criando_obra_almoco_inicio',
-      'criando_obra_almoco_hora_inicio', 'criando_obra_almoco_hora_fim',
+      'criando_obra_almoco_hora_inicio', 'criando_obra_almoco_hora_fim', 'confirmando_obra_duplicata',
       'criando_tarefa_titulo', 'criando_tarefa_descricao', 'criando_tarefa_prazo', 'criando_tarefa_atribuicao',
       'cadastrando_colab_nome', 'cadastrando_colab_telefone', 'cadastrando_colab_tipo', 'cadastrando_colab_funcao',
-      'relatando_problema_descricao', 'relatando_problema_foto'
+      'relatando_problema_descricao', 'relatando_problema_foto',
+      'coletando_nome' // ✅ ADICIONAR NOVO ESTADO
     ];
     
     if (estadosFluxo.includes(colaborador.etapaCadastro)) {
       // Limpar campos temporários com base no tipo de fluxo
-      if (colaborador.etapaCadastro.startsWith('criando_obra_')) {
+      if (colaborador.etapaCadastro.startsWith('criando_obra_') || colaborador.etapaCadastro === 'confirmando_obra_duplicata') {
         colaborador.tempNomeObra = undefined;
         colaborador.tempEnderecoObra = undefined;
         colaborador.tempHoraInicioAlmoco = undefined;
@@ -94,20 +147,43 @@ async function fsmResponder(colaborador, mensagem, contexto) {
       await colaborador.save();
       
       return {
-        resposta: `❌ Operação cancelada. Voltando ao menu principal.\n\nDigite qualquer coisa para ver as opções.`,
+        resposta: `❌ OPERAÇÃO CANCELADA
+
+${saudacao} Você cancelou a operação atual.
+Voltando ao menu principal.
+
+Digite qualquer coisa para ver as opções.`,
         etapaNova: 'menu'
       };
     }
   }
 
-  // Onboarding inicial
+  // ===== ONBOARDING INICIAL =====
+  
   if (colaborador.etapaCadastro === 'novo') {
+    // ✅ VERIFICAR SE COLABORADOR PRECISA DEFINIR NOME
+    if (precisaDefinirNome(colaborador)) {
+      return {
+        resposta: `👷‍♂️ *BEM-VINDO AO STARTIA!*
+
+Olá! Sou seu assistente de obras via WhatsApp.
+
+Antes de começar, preciso saber seu nome.
+👤 *Como você gostaria de ser chamado?*
+
+(Ex: "João Silva" ou "Maria")`,
+        etapaNova: 'coletando_nome'
+      };
+    }
+    
+    // Se já tem nome, ir direto para menu
     colaborador.etapaCadastro = 'menu';
     await colaborador.save();
 
     return {
-      resposta: `👷‍♂️ *Bem-vindo ao StartIA!*
-Sou seu assistente de obras via WhatsApp.
+      resposta: `👷‍♂️ *BEM-VINDO DE VOLTA AO STARTIA!*
+
+${saudacao} Sou seu assistente de obras via WhatsApp.
 
 Comigo, você pode:
 ✔️ Criar e organizar obras  
@@ -115,11 +191,11 @@ Comigo, você pode:
 ✔️ Controlar presenças da equipe  
 ✔️ Visualizar tudo com clareza
 
-🎯 Nosso objetivo é evitar bagunça e melhorar a comunicação.
+🎯 Nosso objetivo é evitar bagunça e melhorar a comunicação na sua obra.
 
 Vamos começar?
 
-📋 Menu Inicial:
+📋 MENU INICIAL:
 1️⃣ Criar nova obra  
 2️⃣ Entrar em uma obra existente
 
@@ -128,7 +204,8 @@ Vamos começar?
     };
   }
 
-  // Comandos universais
+  // ===== COMANDOS UNIVERSAIS =====
+  
   if (['menu', 'voltar', 'início', 'inicio', '0'].includes(comando)) {
     // Limpar quaisquer dados temporários de navegação
     colaborador.tempTarefasIds = undefined;
@@ -141,22 +218,90 @@ Vamos começar?
     const resumo = await gerarResumoContextual(colaborador, 'menu');
     
     return {
-      resposta: `📋 Menu Principal:\n\n${resumo}\n\n1️⃣ Criar nova obra  
-2️⃣ Entrar em uma obra existente  
-3️⃣ Ver minhas tarefas  
-4️⃣ Registrar presença  
-5️⃣ Cadastrar tarefa  
-6️⃣ Cadastrar colaborador  
+      resposta: `📱 MENU PRINCIPAL DO STARTIA
+
+${saudacao}
+${resumo}
+
+O que você deseja fazer hoje?
+
+📋 OBRAS
+1️⃣ Criar nova obra  
+2️⃣ Entrar em obra existente  
+
+⏱️ SEU DIA DE TRABALHO
+3️⃣ Ver minhas tarefas pendentes  
+4️⃣ Registrar entrada/saída na obra
+
+👷‍♂️ GERENCIAMENTO  
+5️⃣ Cadastrar nova tarefa  
+6️⃣ Adicionar colaborador  
 7️⃣ Ver equipe da obra  
-8️⃣ O que é o StartIA?
-9️⃣ Relatar problema
-🔟 Ver problemas`,
+
+⚠️ PROBLEMAS
+9️⃣ Relatar um problema
+🔟 Ver problemas reportados
+
+ℹ️ Digite 8️⃣ para conhecer mais sobre o StartIA`,
       etapaNova: 'menu'
     };
   }
 
-  // Processamento dos estados específicos com comandos rápidos
+  // ===== PROCESSAMENTO DOS ESTADOS ESPECÍFICOS =====
+  
   switch (colaborador.etapaCadastro) {
+    // ✅ NOVO ESTADO PARA COLETAR NOME
+    case 'coletando_nome':
+      if (!mensagemTexto || mensagemTexto.trim().length < 2) {
+        return {
+          resposta: `⚠️ Por favor, digite um nome válido com pelo menos 2 caracteres.
+
+👤 *Como você gostaria de ser chamado?*
+(Ex: "João Silva" ou "Maria")`,
+          etapaNova: 'coletando_nome'
+        };
+      }
+      
+      try {
+        await definirNomeColaborador(colaborador._id, mensagemTexto.trim());
+        
+        // Recarregar colaborador para ter nome atualizado
+        const Colaborador = require('../../domains/colaborador/colaborador.model');
+        const colaboradorAtualizado = await Colaborador.findById(colaborador._id);
+        const saudacaoAtualizada = obterSaudacao(colaboradorAtualizado);
+        
+        return {
+          resposta: `✅ Muito prazer, *${colaboradorAtualizado.nome}*!
+
+🏗️ *STARTIA - SEU ASSISTENTE DE OBRAS*
+
+Comigo você pode:
+✔️ Criar e organizar obras  
+✔️ Cadastrar e acompanhar tarefas  
+✔️ Controlar presenças da equipe  
+✔️ Visualizar tudo com clareza
+
+🎯 Nosso objetivo é evitar bagunça e melhorar a comunicação na sua obra.
+
+Vamos começar?
+
+📋 MENU INICIAL:
+1️⃣ Criar nova obra  
+2️⃣ Entrar em uma obra existente
+
+💡 Digite "ajuda" a qualquer momento para ver os comandos disponíveis.`,
+          etapaNova: 'menu'
+        };
+      } catch (error) {
+        console.error('❌ Erro ao definir nome:', error);
+        return {
+          resposta: `❌ Erro ao salvar seu nome. Tente novamente.
+
+👤 *Como você gostaria de ser chamado?*`,
+          etapaNova: 'coletando_nome'
+        };
+      }
+    
     case 'menu':
       // Comandos rápidos para o menu
       if (comando === 'tarefas' || comando === 'minhas tarefas') {
@@ -164,7 +309,14 @@ Vamos começar?
       } else if (comando === 'presença' || comando === 'presenca') {
         colaborador.subEstado = colaborador.obras ? colaborador.obras[0] : null;
         return {
-          resposta: `📍 Registro de Presença\n\nVocê deseja registrar:\n1. Entrada\n2. Saída\n\nOu envie "status" para verificar sua situação atual.`,
+          resposta: `📝 REGISTRO DE PRESENÇA
+
+${saudacao} Escolha uma opção:
+1️⃣ Registrar ENTRADA agora (início de expediente)
+2️⃣ Registrar SAÍDA agora (fim de expediente)
+
+🕒 Para verificar seu status de hoje, digite "status"
+0️⃣ Voltar ao menu principal`,
           etapaNova: 'registrando_presenca'
         };
       } else if (comando === 'equipe' || comando === 'colaboradores') {
@@ -172,7 +324,14 @@ Vamos começar?
       } else if (comando === 'problema' || comando === 'relatar') {
         colaborador.subEstado = 'descricao';
         return {
-          resposta: `📝 Por favor, descreva o problema encontrado na obra:`,
+          resposta: `⚠️ RELATAR PROBLEMA NA OBRA
+
+${saudacao} Conte-nos o que está acontecendo.
+
+📝 Por favor, descreva detalhadamente o problema:
+- Onde está ocorrendo?
+- O que está acontecendo?
+- Qual a urgência?`,
           etapaNova: 'relatando_problema_descricao'
         };
       } else if (comando === 'resumo') {
@@ -184,16 +343,20 @@ Vamos começar?
       
       return await estadoMenu(colaborador, mensagemTexto);
 
+    // ===== ESTADOS DE CRIAÇÃO DE OBRA =====
     case 'criando_obra_nome':
     case 'criando_obra_endereco':
     case 'criando_obra_almoco_inicio':
     case 'criando_obra_almoco_hora_inicio':
     case 'criando_obra_almoco_hora_fim':
+    case 'confirmando_obra_duplicata':
       return await estadoCriandoObra(colaborador, mensagemTexto);
 
+    // ===== ESTADOS DE ENTRADA EM OBRA =====
     case 'entrando_obra_codigo':
       return await estadoEntrandoObra(colaborador, mensagemTexto);
       
+    // ===== ESTADO EM OBRA =====
     case 'em_obra':
       // Comandos rápidos para estado em obra
       if (comando === 'entrada' || comando === 'entrar') {
@@ -214,10 +377,10 @@ Vamos começar?
       
       return await estadoEmObra(colaborador, mensagemTexto);
 
+    // ===== ESTADOS DE TAREFAS =====
     case 'ver_tarefas':
       return await estadoVerTarefas(colaborador, mensagemTexto);
       
-    // Novo estado para ver detalhes de uma tarefa
     case 'ver_tarefa_detalhe':
       return await estadoVerTarefaDetalhe(colaborador, mensagemTexto);
 
@@ -227,6 +390,7 @@ Vamos começar?
     case 'criando_tarefa_atribuicao':
       return await estadoCriandoTarefa(colaborador, mensagemTexto);
 
+    // ===== ESTADOS DE COLABORADORES =====
     case 'cadastrando_colab_nome':
     case 'cadastrando_colab_telefone':
     case 'cadastrando_colab_tipo':
@@ -236,6 +400,7 @@ Vamos começar?
     case 'ver_colaboradores':
       return await estadoVerColaboradores(colaborador, mensagemTexto);
 
+    // ===== ESTADO DE PRESENÇA =====
     case 'registrando_presenca':
       // Pegar a obra atual do colaborador, se existir
       let obraAtual = null;
@@ -267,10 +432,11 @@ Vamos começar?
         etapaNova: resultadoPresenca.proximoEstado || 'registrando_presenca'
       };
 
+    // ===== ESTADO DE GUIA =====
     case 'guia_startia':
       return await estadoGuiaStartIA(colaborador, mensagemTexto);
       
-    // Estados para problemas
+    // ===== ESTADOS DE PROBLEMAS =====
     case 'relatando_problema_descricao':
     case 'relatando_problema_foto':
       return await estadoRelatandoProblema(colaborador, mensagemTexto, contexto);
@@ -278,14 +444,41 @@ Vamos começar?
     case 'vendo_problemas':
       return await estadoVerProblemas(colaborador, mensagemTexto);
 
-    // Fallback de segurança
+    // ===== FALLBACK DE SEGURANÇA =====
     default:
       console.warn(`⚠️ Estado desconhecido: ${colaborador.etapaCadastro}. Resetando para menu.`);
+      
+      // Limpar dados temporários antes de resetar
+      try {
+        const Colaborador = require('../../domains/colaborador/colaborador.model');
+        const colaboradorCompleto = await Colaborador.findById(colaborador._id);
+        if (colaboradorCompleto && colaboradorCompleto.limparDadosTemporarios) {
+          await colaboradorCompleto.limparDadosTemporarios();
+        }
+      } catch (error) {
+        console.error('❌ Erro ao limpar dados temporários:', error);
+      }
+      
       colaborador.etapaCadastro = 'menu';
       await colaborador.save();
 
       return {
-        resposta: `⚠️ Ocorreu um erro ou estado desconhecido.\n\n🔄 Retornando ao menu principal...\n\n📋 Menu Principal:\n1️⃣ Criar nova obra\n2️⃣ Entrar em uma obra existente\n3️⃣ Ver minhas tarefas\n4️⃣ Registrar presença\n5️⃣ Cadastrar tarefa\n6️⃣ Cadastrar colaborador\n7️⃣ Ver equipe da obra\n8️⃣ O que é o StartIA?\n9️⃣ Relatar problema\n🔟 Ver problemas
+        resposta: `⚠️ ERRO DE SISTEMA
+
+${saudacao} Ocorreu um erro ou estado desconhecido.
+Retornamos você ao menu principal para sua segurança.
+
+📱 MENU PRINCIPAL:
+1️⃣ Criar nova obra
+2️⃣ Entrar em obra existente
+3️⃣ Ver minhas tarefas
+4️⃣ Registrar presença
+5️⃣ Cadastrar tarefa
+6️⃣ Adicionar colaborador
+7️⃣ Ver equipe da obra
+8️⃣ O que é o StartIA?
+9️⃣ Relatar problema
+🔟 Ver problemas
 
 💡 Digite "ajuda" a qualquer momento para ver os comandos disponíveis.`,
         etapaNova: 'menu'
