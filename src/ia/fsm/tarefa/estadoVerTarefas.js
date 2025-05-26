@@ -1,152 +1,167 @@
-// src/ia/fsm/tarefa/estadoVerTarefas.js
+// src/ia/fsm/tarefa/estadoVerTarefas.js - MVP COM ANDARES
 
-const { listarTarefasPorColaborador } = require('../../../domains/tarefa/tarefa.service');
-const Obra = require('../../../domains/obra/obra.model');
-const { gerarBreadcrumb } = require('../../../utils/gerarResumoContextual');
+const Tarefa = require('../../../domains/tarefa/tarefa.model');
 
 module.exports = async function estadoVerTarefas(colaborador, mensagem) {
-  // Se recebemos um número e temos tarefas armazenadas, selecionar a tarefa
-  if (mensagem && !isNaN(parseInt(mensagem)) && colaborador.tempTarefasIds) {
-    const indice = parseInt(mensagem) - 1;
-    if (indice >= 0 && indice < colaborador.tempTarefasIds.length) {
-      // Armazenar o ID da tarefa selecionada
-      colaborador.tempTarefaSelecionadaId = colaborador.tempTarefasIds[indice];
-      await colaborador.save();
-      
-      // Redirecionar para o estado de detalhes da tarefa
-      const estadoVerTarefaDetalhe = require('./estadoVerTarefaDetalhe');
-      return await estadoVerTarefaDetalhe(colaborador);
-    } else {
-      // Índice inválido
+  try {
+    const obraId = colaborador.subEstado || (colaborador.obras && colaborador.obras[0]);
+    
+    if (!obraId) {
       return {
-        resposta: `❌ Opção inválida. Digite um número entre 1 e ${colaborador.tempTarefasIds.length} ou "menu" para voltar.`,
-        etapaNova: 'ver_tarefas'
+        resposta: `❌ Você não está em nenhuma obra. Digite "2" para entrar em uma obra.`,
+        etapaNova: 'menu'
       };
     }
-  }
 
-  // Listar tarefas
-  const tarefas = await listarTarefasPorColaborador(colaborador._id);
+    // ✅ BUSCAR TODAS AS TAREFAS DA OBRA
+    const todasTarefas = await Tarefa.find({ obra: obraId }).sort({ andar: 1, unidade: 1 });
+    
+    if (!todasTarefas.length) {
+      return {
+        resposta: `📭 Nenhuma tarefa encontrada nesta obra.
 
-  if (!tarefas.length) {
-    return {
-      resposta: `📭 Você não possui tarefas atribuídas no momento.
+Digite "5" para cadastrar uma nova tarefa.`,
+        etapaNova: 'menu'
+      };
+    }
+
+    // ✅ PROCESSAR SELEÇÃO DE TAREFA
+    if (mensagem && !isNaN(parseInt(mensagem))) {
+      const indice = parseInt(mensagem) - 1;
+      const tarefasDisponiveis = todasTarefas.filter(t => t.status === 'pendente' && t.atribuidaPara.length === 0);
       
-${gerarBreadcrumb('ver_tarefas')}
+      if (indice >= 0 && indice < tarefasDisponiveis.length) {
+        const tarefa = tarefasDisponiveis[indice];
+        
+        // ✅ PEGAR TAREFA (POOL)
+        tarefa.status = 'em_andamento';
+        tarefa.atribuidaPara = [colaborador._id];
+        await tarefa.save();
+        
+        return {
+          resposta: `✅ *TAREFA INICIADA!*
 
-O que você gostaria de fazer agora?
-- Digite 5 para cadastrar uma nova tarefa
-- Digite "menu" para voltar ao menu principal`,
+📋 ${tarefa.titulo}
+🏠 Unidade: ${tarefa.unidade}
+🔧 Fase: ${tarefa.fase}
+⏰ Iniciado: ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+
+🎯 *O que fazer agora?*
+1️⃣ Marcar como concluída
+2️⃣ Reportar problema
+3️⃣ Ver mais tarefas (digite "3")
+
+💡 Digite "minhas" para ver suas tarefas em andamento`,
+          etapaNova: 'menu'
+        };
+      }
+    }
+
+    // ✅ COMANDOS ESPECIAIS
+    if (mensagem) {
+      const cmd = mensagem.toLowerCase().trim();
+      
+      if (cmd === 'minhas') {
+        const minhasTarefas = todasTarefas.filter(t => 
+          t.atribuidaPara.some(id => id.toString() === colaborador._id.toString())
+        );
+        
+        if (!minhasTarefas.length) {
+          return {
+            resposta: `📋 Você não tem tarefas em andamento.
+
+🟢 Digite "3" para ver tarefas disponíveis para pegar.`,
+            etapaNova: 'menu'
+          };
+        }
+        
+        let resposta = `📋 *SUAS TAREFAS EM ANDAMENTO (${minhasTarefas.length}):*\n\n`;
+        
+        minhasTarefas.forEach((tarefa, i) => {
+          const statusIcon = tarefa.status === 'em_andamento' ? '🔄' : '✅';
+          resposta += `${i + 1}️⃣ ${statusIcon} ${tarefa.titulo}\n`;
+          resposta += `   🏠 ${tarefa.unidade} | 🔧 ${tarefa.fase}\n`;
+        });
+        
+        resposta += `\n💡 Digite o número para gerenciar uma tarefa`;
+        
+        return { resposta, etapaNova: 'ver_tarefas' };
+      }
+    }
+
+    // ✅ AGRUPAR POR ANDAR
+    const tarefasPorAndar = {};
+    todasTarefas.forEach(tarefa => {
+      const andar = tarefa.andar || 'Sem andar';
+      if (!tarefasPorAndar[andar]) {
+        tarefasPorAndar[andar] = { total: 0, concluidas: 0, andamento: 0, disponiveis: 0 };
+      }
+      
+      tarefasPorAndar[andar].total++;
+      
+      if (tarefa.status === 'concluida') {
+        tarefasPorAndar[andar].concluidas++;
+      } else if (tarefa.status === 'em_andamento') {
+        tarefasPorAndar[andar].andamento++;
+      } else if (tarefa.atribuidaPara.length === 0) {
+        tarefasPorAndar[andar].disponiveis++;
+      }
+    });
+
+    // ✅ TAREFAS DISPONÍVEIS PARA PEGAR
+    const tarefasDisponiveis = todasTarefas.filter(t => 
+      t.status === 'pendente' && t.atribuidaPara.length === 0
+    );
+    
+    // ✅ GERAR RESPOSTA PRINCIPAL
+    let resposta = `📋 *TAREFAS DA OBRA*\n\n`;
+    
+    // Resumo por andar
+    resposta += `🏢 *RESUMO POR ANDAR:*\n`;
+    Object.keys(tarefasPorAndar)
+      .sort((a, b) => parseInt(a) - parseInt(b))
+      .forEach(andar => {
+        const stats = tarefasPorAndar[andar];
+        const progresso = Math.round((stats.concluidas / stats.total) * 100);
+        const progressBar = '█'.repeat(Math.floor(progresso / 10)) + '░'.repeat(10 - Math.floor(progresso / 10));
+        
+        resposta += `${andar}º: ${progressBar} ${progresso}% (${stats.concluidas}/${stats.total})\n`;
+        resposta += `   🟢 ${stats.concluidas} | 🔄 ${stats.andamento} | 🟡 ${stats.disponiveis}\n`;
+      });
+    
+    // Tarefas disponíveis para pegar
+    if (tarefasDisponiveis.length > 0) {
+      resposta += `\n🟢 *TAREFAS DISPONÍVEIS PARA PEGAR (${tarefasDisponiveis.length}):*\n`;
+      
+      tarefasDisponiveis.slice(0, 10).forEach((tarefa, i) => {
+        resposta += `${i + 1}️⃣ ${tarefa.titulo}\n`;
+        resposta += `   🏠 ${tarefa.unidade} | 🔧 ${tarefa.fase}\n`;
+      });
+      
+      if (tarefasDisponiveis.length > 10) {
+        resposta += `\n... e mais ${tarefasDisponiveis.length - 10} tarefas\n`;
+      }
+      
+      resposta += `\n💡 Digite o número para PEGAR uma tarefa`;
+    } else {
+      resposta += `\n✅ Todas as tarefas estão atribuídas ou concluídas!`;
+    }
+    
+    resposta += `\n\n🎯 *COMANDOS:*`;
+    resposta += `\n• "minhas" - Suas tarefas em andamento`;
+    resposta += `\n• "5" - Criar nova tarefa`;
+    resposta += `\n• "menu" - Voltar ao menu`;
+
+    return {
+      resposta,
+      etapaNova: 'ver_tarefas'
+    };
+    
+  } catch (error) {
+    console.error('❌ Erro ao ver tarefas:', error);
+    return {
+      resposta: `❌ Erro ao carregar tarefas. Tente novamente.`,
       etapaNova: 'menu'
     };
   }
-
-  // Agrupar por obra e status
-  const tarefasPorObra = {};
-  
-  // Lista plana de IDs de tarefas para recuperar pelo índice
-  const tarefasIds = [];
-  const tarefasObjetos = {};
-  
-  for (const tarefa of tarefas) {
-    // Adicionar à lista plana de IDs
-    const tarefaId = tarefa._id.toString();
-    tarefasIds.push(tarefaId);
-    tarefasObjetos[tarefaId] = tarefa;
-    
-    // Agrupar por obra e status
-    const obraId = tarefa.obra.toString();
-    if (!tarefasPorObra[obraId]) tarefasPorObra[obraId] = {
-      pendentes: [],
-      emAndamento: [],
-      concluidas: []
-    };
-    
-    // Categorizar por status
-    if (tarefa.status === 'pendente') {
-      tarefasPorObra[obraId].pendentes.push(tarefa);
-    } else if (tarefa.status === 'em_andamento') {
-      tarefasPorObra[obraId].emAndamento.push(tarefa);
-    } else {
-      tarefasPorObra[obraId].concluidas.push(tarefa);
-    }
-  }
-  
-  // Salvar os IDs de tarefas no colaborador temporariamente
-  colaborador.tempTarefasIds = tarefasIds;
-  // Também armazenar o índice global de cada tarefa
-  colaborador.tempIndicesPorTarefa = {};
-  tarefasIds.forEach((id, index) => {
-    colaborador.tempIndicesPorTarefa[id] = index + 1; // +1 para UI amigável (começa em 1)
-  });
-  await colaborador.save();
-
-  let resposta = `📋 *Suas Tarefas:*\n`;
-
-  // Resumo quantitativo
-  const totalPendentes = tarefas.filter(t => t.status === 'pendente').length;
-  const totalEmAndamento = tarefas.filter(t => t.status === 'em_andamento').length;
-  const totalConcluidas = tarefas.filter(t => t.status === 'concluida').length;
-  
-  resposta += `\n📊 *Resumo:*`;
-  resposta += `\n🟡 Pendentes: ${totalPendentes}`;
-  resposta += `\n🟠 Em andamento: ${totalEmAndamento}`;
-  resposta += `\n✅ Concluídas: ${totalConcluidas}`;
-  resposta += `\n`;
-
-  // Contador global para numerar tarefas de 1 a N
-  let contadorGlobal = 1;
-
-  // Detalhes por obra
-  for (const [obraId, categorias] of Object.entries(tarefasPorObra)) {
-    const obra = await Obra.findById(obraId);
-    resposta += `\n🏗️ *${obra?.nome || 'Obra Desconhecida'}*\n`;
-
-    // Tarefas pendentes primeiro
-    if (categorias.pendentes.length > 0) {
-      resposta += `\n🟡 *Pendentes:*\n`;
-      categorias.pendentes.forEach((tarefa) => {
-        // Usar o contador global para listar tarefas de 1 a N
-        resposta += `${contadorGlobal}. ${tarefa.titulo}\n`;
-        if (tarefa.prazo) {
-          const prazoFormatado = tarefa.prazo.toLocaleDateString('pt-PT');
-          resposta += `   📅 Até: ${prazoFormatado}\n`;
-        }
-        contadorGlobal++;
-      });
-    }
-
-    // Tarefas em andamento
-    if (categorias.emAndamento.length > 0) {
-      resposta += `\n🟠 *Em Andamento:*\n`;
-      categorias.emAndamento.forEach((tarefa) => {
-        resposta += `${contadorGlobal}. ${tarefa.titulo}\n`;
-        contadorGlobal++;
-      });
-    }
-
-    // Tarefas concluídas (limitadas a 3 para não sobrecarregar)
-    if (categorias.concluidas.length > 0) {
-      const limitadas = categorias.concluidas.slice(0, 3);
-      resposta += `\n✅ *Concluídas (${categorias.concluidas.length}):*\n`;
-      limitadas.forEach((tarefa) => {
-        resposta += `${contadorGlobal}. ${tarefa.titulo}\n`;
-        contadorGlobal++;
-      });
-      
-      if (categorias.concluidas.length > 3) {
-        resposta += `   ...e mais ${categorias.concluidas.length - 3}\n`;
-        // Incrementar o contador para as tarefas não mostradas
-        contadorGlobal += (categorias.concluidas.length - 3);
-      }
-    }
-  }
-
-  resposta += `\n${gerarBreadcrumb('ver_tarefas')}`;
-  resposta += `\n\n💡 Digite o número da tarefa para ver detalhes ou "menu" para voltar.`;
-
-  return {
-    resposta: resposta.trim(),
-    etapaNova: 'ver_tarefas' // IMPORTANTE: Manter no estado ver_tarefas em vez de menu
-  };
 };

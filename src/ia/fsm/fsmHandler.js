@@ -384,11 +384,13 @@ ${saudacao} Conte-nos o que está acontecendo.
     case 'ver_tarefa_detalhe':
       return await estadoVerTarefaDetalhe(colaborador, mensagemTexto);
 
-    case 'criando_tarefa_titulo':
-    case 'criando_tarefa_descricao':
-    case 'criando_tarefa_prazo':
-    case 'criando_tarefa_atribuicao':
-      return await estadoCriandoTarefa(colaborador, mensagemTexto);
+      case 'criando_tarefa_titulo':
+        case 'criando_tarefa_descricao':
+        case 'criando_tarefa_prazo':
+        case 'criando_tarefa_atribuicao':
+        case 'criando_tarefa_unidades':   
+        case 'criando_tarefa_fase': 
+          return await estadoCriandoTarefa(colaborador, mensagemTexto);
 
     // ===== ESTADOS DE COLABORADORES =====
     case 'cadastrando_colab_nome':
