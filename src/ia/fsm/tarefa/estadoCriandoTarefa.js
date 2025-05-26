@@ -1,4 +1,4 @@
-// src/ia/fsm/tarefa/estadoCriandoTarefa.js - MVP SIMPLIFICADO
+// src/ia/fsm/tarefa/estadoCriandoTarefa.js - VERSÃO CORRIGIDA
 
 const Tarefa = require('../../../domains/tarefa/tarefa.model');
 const Colaborador = require('../../../domains/colaborador/colaborador.model');
@@ -95,8 +95,49 @@ Exemplos válidos:
       case 'criando_tarefa_prazo':
         const prazo = parsePrazo(mensagem.trim());
         
-        // Criar tarefas em lote
-        return await criarTarefasEmLote(colaborador, prazo);
+        colaborador.tempPrazoTarefaFinal = prazo;
+        etapaNova = 'criando_tarefa_confirmacao';
+        
+        const preview = gerarPreviewTarefas(colaborador);
+        resposta = `📋 PREVIEW DAS TAREFAS
+
+${preview}
+
+✅ Confirma a criação?
+
+1️⃣ Sim, criar tarefas
+2️⃣ Não, voltar para editar
+0️⃣ Cancelar tudo`;
+        
+        await colaborador.save();
+        break;
+
+      case 'criando_tarefa_confirmacao':
+        if (mensagem === '1' || mensagem.toLowerCase().includes('sim')) {
+          return await criarTarefasEmLote(colaborador);
+        } else if (mensagem === '2' || mensagem.toLowerCase().includes('não') || mensagem.toLowerCase().includes('nao')) {
+          etapaNova = 'criando_tarefa_prazo';
+          resposta = `📅 Prazo para ${colaborador.tempFaseTarefa}?
+
+• "hoje", "amanha", "25/01/2025", "sem prazo"
+
+💡 Digite o novo prazo:`;
+        } else if (mensagem === '0' || mensagem.toLowerCase() === 'cancelar') {
+          // Limpar dados temporários
+          colaborador.tempTituloTarefa = undefined;
+          colaborador.tempUnidadesTarefa = undefined;
+          colaborador.tempFaseTarefa = undefined;
+          colaborador.tempPrazoTarefaFinal = undefined;
+          await colaborador.save();
+          
+          return {
+            resposta: `❌ Criação cancelada. Voltando ao menu principal.`,
+            etapaNova: 'menu'
+          };
+        } else {
+          resposta = `❌ Opção inválida. Digite 1 (sim), 2 (editar) ou 0 (cancelar).`;
+        }
+        break;
 
       default:
         resposta = `❌ Erro no fluxo. Digite "menu" para voltar.`;
@@ -105,8 +146,10 @@ Exemplos válidos:
     }
 
   } catch (error) {
-    console.error('❌ Erro:', error);
-    resposta = `❌ Erro ao criar tarefa. Digite "menu" para voltar.`;
+    console.error('❌ Erro ao criar tarefa:', error);
+    resposta = `❌ Erro ao criar tarefa: ${error.message}
+
+Digite "menu" para voltar.`;
     etapaNova = 'menu';
   }
 
@@ -130,14 +173,17 @@ function parseUnidades(input) {
   // Range: 101-105
   if (input.includes('-')) {
     const [inicio, fim] = input.split('-').map(n => parseInt(n.trim()));
-    if (inicio && fim && fim >= inicio) {
+    if (inicio && fim && fim >= inicio && fim - inicio <= 50) {
       return Array.from({length: fim - inicio + 1}, (_, i) => String(inicio + i));
     }
   }
   
   // Lista: 101,102,103
   if (input.includes(',')) {
-    return input.split(',').map(u => u.trim()).filter(u => u.length > 0);
+    const unidades = input.split(',')
+      .map(u => u.trim())
+      .filter(u => u.length > 0 && /^\d+$/.test(u));
+    return unidades.length > 0 ? unidades : null;
   }
   
   // Único: 101
@@ -169,19 +215,52 @@ function parsePrazo(input) {
   const match = input.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (match) {
     const [, dia, mes, ano] = match;
-    return new Date(parseInt(ano), parseInt(mes) - 1, parseInt(dia), 23, 59, 59, 999);
+    const data = new Date(parseInt(ano), parseInt(mes) - 1, parseInt(dia), 23, 59, 59, 999);
+    if (!isNaN(data.getTime())) {
+      return data;
+    }
   }
   
   return null;
 }
 
-// ✅ CRIAR TAREFAS EM LOTE
-async function criarTarefasEmLote(colaborador, prazo) {
+// ✅ FUNÇÃO SIMPLES: Gerar preview
+function gerarPreviewTarefas(colaborador) {
+  const titulo = colaborador.tempTituloTarefa;
+  const unidades = colaborador.tempUnidadesTarefa || [];
+  const fase = colaborador.tempFaseTarefa;
+  const prazo = colaborador.tempPrazoTarefaFinal;
+  
+  let preview = `📋 Resumo:
+🏷️ Tipo: ${titulo} - ${fase}
+🏠 Unidades: ${unidades.join(', ')}
+📅 Prazo: ${prazo ? prazo.toLocaleDateString('pt-PT') : 'Sem prazo'}
+
+📝 Serão criadas ${unidades.length} tarefa${unidades.length > 1 ? 's' : ''}:`;
+  
+  unidades.slice(0, 3).forEach((unidade, i) => {
+    preview += `\n${i + 1}. ${titulo} - ${unidade}`;
+  });
+  
+  if (unidades.length > 3) {
+    preview += `\n... e mais ${unidades.length - 3} tarefa${unidades.length - 3 > 1 ? 's' : ''}`;
+  }
+  
+  return preview;
+}
+
+// ✅ CRIAR TAREFAS EM LOTE SIMPLIFICADO
+async function criarTarefasEmLote(colaborador) {
   try {
     const obraId = colaborador.subEstado || (colaborador.obras && colaborador.obras[0]);
     const titulo = colaborador.tempTituloTarefa;
     const unidades = colaborador.tempUnidadesTarefa;
     const fase = colaborador.tempFaseTarefa;
+    const prazo = colaborador.tempPrazoTarefaFinal;
+    
+    if (!obraId) {
+      throw new Error('Nenhuma obra ativa encontrada');
+    }
     
     const tarefasCriadas = [];
     
@@ -197,7 +276,7 @@ async function criarTarefasEmLote(colaborador, prazo) {
         andar: andar,
         prazo: prazo,
         status: 'pendente',
-        atribuidaPara: [] // ✅ Pool - sem atribuição fixa
+        atribuidaPara: []
       });
       
       await tarefa.save();
@@ -208,21 +287,23 @@ async function criarTarefasEmLote(colaborador, prazo) {
     colaborador.tempTituloTarefa = undefined;
     colaborador.tempUnidadesTarefa = undefined;  
     colaborador.tempFaseTarefa = undefined;
+    colaborador.tempPrazoTarefaFinal = undefined;
     await colaborador.save();
     
-    const resposta = `✅ *${tarefasCriadas.length} TAREFAS CRIADAS!*
+    // Resposta simplificada
+    let resposta = `✅ ${tarefasCriadas.length} TAREFAS CRIADAS!
 
-📋 *Resumo:*
+📋 Resumo:
 🏷️ Tipo: ${titulo} - ${fase}
 🏠 Unidades: ${unidades.join(', ')}
 📅 Prazo: ${prazo ? prazo.toLocaleDateString('pt-PT') : 'Sem prazo'}
 
-🎯 *Próximos passos:*
-• Tarefas estão no POOL para qualquer colaborador pegar
+🎯 Próximos passos:
 • Digite "3" para ver tarefas disponíveis
+• Digite "5" para criar mais tarefas
 • Digite "menu" para voltar ao menu
 
-👥 Colaboradores já podem pegar essas tarefas!`;
+💡 As tarefas estão no POOL - qualquer colaborador pode pegá-las!`;
     
     return {
       resposta,
@@ -231,8 +312,18 @@ async function criarTarefasEmLote(colaborador, prazo) {
     
   } catch (error) {
     console.error('❌ Erro ao criar tarefas:', error);
+    
+    // Limpar dados mesmo em caso de erro
+    colaborador.tempTituloTarefa = undefined;
+    colaborador.tempUnidadesTarefa = undefined;  
+    colaborador.tempFaseTarefa = undefined;
+    colaborador.tempPrazoTarefaFinal = undefined;
+    await colaborador.save();
+    
     return {
-      resposta: `❌ Erro ao criar tarefas. Tente novamente.`,
+      resposta: `❌ Erro ao criar tarefas: ${error.message}
+
+Digite "5" para tentar novamente ou "menu" para voltar.`,
       etapaNova: 'menu'
     };
   }

@@ -1,4 +1,4 @@
-// domains/colaborador/colaborador.model.js - VERSÃO FINAL ATUALIZADA
+// domains/colaborador/colaborador.model.js - VERSÃO ATUALIZADA COM MELHORIAS
 
 const mongoose = require('mongoose');
 
@@ -37,9 +37,13 @@ const ColaboradorSchema = new mongoose.Schema({
       'criando_tarefa_prazo',
       'criando_tarefa_atribuicao',
       
-      // ✅ NOVOS ESTADOS PARA MVP DE UNIDADES:
+      // ✅ ESTADOS PARA MVP DE UNIDADES:
       'criando_tarefa_unidades',  // Para definir quartos/unidades
       'criando_tarefa_fase',      // Para definir fase (calhas/cortinados/etc)
+      'criando_tarefa_confirmacao', // ✅ NOVO: Para confirmar antes de criar
+      
+      'gerenciando_tarefa_ativa', // ✅ CRÍTICO: Estado para gerenciar tarefa após pegar do POOL
+      'selecionando_minha_tarefa', // ✅ CRÍTICO: Estado para selecionar tarefa pessoal
       
       'cadastrando_colab_nome',
       'cadastrando_colab_telefone',
@@ -52,7 +56,8 @@ const ColaboradorSchema = new mongoose.Schema({
       // Estados para problemas
       'relatando_problema_descricao',
       'relatando_problema_foto',
-      'vendo_problemas'
+      'vendo_problemas',
+      'gerenciando_tarefa_ativa' // ✅ NOVO ESTADO
     ],
     default: 'novo'
   },
@@ -71,12 +76,13 @@ const ColaboradorSchema = new mongoose.Schema({
   // Temporários para criação de tarefa
   tempTituloTarefa: { type: String },
   tempDescricaoTarefa: { type: String },
-  tempPrazoTarefa: { type: Date },
+  tempPrazoTarefa: { type: Date }, // ✅ CORRIGIDO: era Date antes, mantém consistência
   tempColaboradoresDisponiveis: [{ type: mongoose.Schema.Types.ObjectId }],
   
-  // ✅ NOVOS CAMPOS TEMPORÁRIOS PARA MVP:
+  // ✅ CAMPOS TEMPORÁRIOS PARA MVP:
   tempUnidadesTarefa: [{ type: String }],  // ["101", "102", "103"]
   tempFaseTarefa: { type: String },        // "calhas", "cortinados", "acabamento"
+  tempPrazoTarefaFinal: { type: Date },    // ✅ NOVO: para armazenar prazo parseado
   
   // Temporários para visualização de tarefas
   tempTarefasIds: [{ type: String }],
@@ -104,7 +110,7 @@ ColaboradorSchema.index({ obras: 1 });
 ColaboradorSchema.index({ etapaCadastro: 1 });
 ColaboradorSchema.index({ nome: 1 });
 
-// Middleware para limpeza automática de dados temporários antigos
+// ✅ MIDDLEWARE CORRIGIDO para limpeza automática de dados temporários
 ColaboradorSchema.pre('save', function(next) {
   // Se mudou de estado e não está mais criando obra, limpar dados temporários de obra
   if (this.isModified('etapaCadastro') && 
@@ -116,7 +122,7 @@ ColaboradorSchema.pre('save', function(next) {
     this.tempHoraFimAlmoco = undefined;
   }
   
-  // Se mudou de estado e não está mais criando tarefa, limpar dados temporários de tarefa
+  // ✅ CORRIGIDO: Se mudou de estado e não está mais criando tarefa, limpar dados temporários de tarefa
   if (this.isModified('etapaCadastro') && 
       !this.etapaCadastro.startsWith('criando_tarefa_')) {
     this.tempTituloTarefa = undefined;
@@ -127,6 +133,7 @@ ColaboradorSchema.pre('save', function(next) {
     // ✅ NOVOS CAMPOS NA LIMPEZA:
     this.tempUnidadesTarefa = undefined;
     this.tempFaseTarefa = undefined;
+    this.tempPrazoTarefaFinal = undefined;
   }
   
   // Se mudou de estado e não está mais cadastrando colaborador, limpar dados temporários
@@ -160,7 +167,7 @@ ColaboradorSchema.pre('save', function(next) {
   next();
 });
 
-// Método para verificar se o colaborador está em um fluxo ativo
+// ✅ MÉTODO ATUALIZADO para verificar se o colaborador está em um fluxo ativo
 ColaboradorSchema.methods.estaEmFluxo = function() {
   const estadosFluxo = [
     'criando_obra_nome', 'criando_obra_endereco', 'criando_obra_almoco_inicio',
@@ -168,7 +175,8 @@ ColaboradorSchema.methods.estaEmFluxo = function() {
     'criando_tarefa_titulo', 'criando_tarefa_descricao', 'criando_tarefa_prazo', 'criando_tarefa_atribuicao',
     
     // ✅ INCLUIR NOVOS ESTADOS NO FLUXO:
-    'criando_tarefa_unidades', 'criando_tarefa_fase',
+    'criando_tarefa_unidades', 'criando_tarefa_fase', 'criando_tarefa_confirmacao',
+    'gerenciando_tarefa_ativa', // ✅ CRÍTICO: Adicionar aqui também!
     
     'cadastrando_colab_nome', 'cadastrando_colab_telefone', 'cadastrando_colab_tipo', 'cadastrando_colab_funcao',
     'relatando_problema_descricao', 'relatando_problema_foto',
@@ -191,7 +199,7 @@ ColaboradorSchema.methods.obterObraAtiva = function() {
   return null;
 };
 
-// Método para limpar todos os dados temporários
+// ✅ MÉTODO ATUALIZADO para limpar todos os dados temporários
 ColaboradorSchema.methods.limparDadosTemporarios = async function() {
   this.tempNomeObra = undefined;
   this.tempEnderecoObra = undefined;
@@ -205,6 +213,7 @@ ColaboradorSchema.methods.limparDadosTemporarios = async function() {
   // ✅ NOVOS CAMPOS NA LIMPEZA MANUAL:
   this.tempUnidadesTarefa = undefined;
   this.tempFaseTarefa = undefined;
+  this.tempPrazoTarefaFinal = undefined;
   
   this.tempTarefasIds = undefined;
   this.tempTarefaSelecionadaId = undefined;
@@ -283,7 +292,7 @@ ColaboradorSchema.virtual('estatisticas').get(function() {
   };
 });
 
-// Método para log de depuração
+// ✅ MÉTODO DE DEBUG ATUALIZADO
 ColaboradorSchema.methods.debug = function() {
   console.log('🔍 DEBUG COLABORADOR:');
   console.log('======================');
@@ -299,9 +308,11 @@ ColaboradorSchema.methods.debug = function() {
   console.log('🔄 Em fluxo?', this.estaEmFluxo());
   console.log('📊 Estatísticas:', this.estatisticas);
   
-  // ✅ DEBUG DOS NOVOS CAMPOS:
+  // ✅ DEBUG DOS CAMPOS TEMPORÁRIOS DE TAREFA:
+  console.log('📝 Temp Título:', this.tempTituloTarefa || 'não definido');
   console.log('🏠 Temp Unidades:', this.tempUnidadesTarefa || 'não definido');
   console.log('🔧 Temp Fase:', this.tempFaseTarefa || 'não definido');
+  console.log('📅 Temp Prazo:', this.tempPrazoTarefaFinal || 'não definido');
   console.log('======================');
 };
 

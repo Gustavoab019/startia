@@ -1,4 +1,4 @@
-// src/ia/fsm/fsmHandler.js - VERSÃO COMPLETA COM CORREÇÃO DE NOME
+// src/ia/fsm/fsmHandler.js - VERSÃO COMPLETA COM CORREÇÃO DO BUG
 
 const mongoose = require('mongoose');
 const estadoMenu = require('./estadoMenu');
@@ -7,6 +7,8 @@ const estadoEntrandoObra = require('./obra/estadoEntrandoObra');
 const estadoEmObra = require('./obra/estadoEmObra');
 const estadoVerTarefas = require('./tarefa/estadoVerTarefas');
 const estadoCriandoTarefa = require('./tarefa/estadoCriandoTarefa');
+const estadoGerenciandoTarefa = require('./tarefa/estadoGerenciandoTarefa'); // ✅ NOVO IMPORT
+const estadoSelecionandoMinhaTarefa = require('./tarefa/estadoSelecionandoMinhaTarefa'); // ✅ NOVO IMPORT
 const estadoCadastrarColaborador = require('./colaborador/estadoCadastrarColaborador');
 const estadoVerColaboradores = require('./colaborador/estadoVerColaboradores');
 const estadoRegistrarPresenca = require('./presenca/estadoRegistrarPresenca');
@@ -110,20 +112,23 @@ Digite "menu" para continuar ou qualquer outra opção.`,
     }
   }
   
-  // 4. Verificar cancelamento de fluxos
+  // ✅ 4. COMANDO CANCELAR CORRIGIDO E ATUALIZADO
   if (['cancelar', 'cancel'].includes(comando)) {
     // Estados que fazem parte de um fluxo que pode ser cancelado
     const estadosFluxo = [
       'criando_obra_nome', 'criando_obra_endereco', 'criando_obra_almoco_inicio',
       'criando_obra_almoco_hora_inicio', 'criando_obra_almoco_hora_fim', 'confirmando_obra_duplicata',
       'criando_tarefa_titulo', 'criando_tarefa_descricao', 'criando_tarefa_prazo', 'criando_tarefa_atribuicao',
+      'criando_tarefa_unidades', 'criando_tarefa_fase', 'criando_tarefa_confirmacao',
       'cadastrando_colab_nome', 'cadastrando_colab_telefone', 'cadastrando_colab_tipo', 'cadastrando_colab_funcao',
       'relatando_problema_descricao', 'relatando_problema_foto',
-      'coletando_nome' // ✅ ADICIONAR NOVO ESTADO
+      'gerenciando_tarefa_ativa', // ✅ NOVO ESTADO ADICIONADO
+      'selecionando_minha_tarefa', // ✅ NOVO ESTADO ADICIONADO
+      'coletando_nome'
     ];
     
     if (estadosFluxo.includes(colaborador.etapaCadastro)) {
-      // Limpar campos temporários com base no tipo de fluxo
+      // ✅ LIMPEZA CORRIGIDA - Limpar campos temporários com base no tipo de fluxo
       if (colaborador.etapaCadastro.startsWith('criando_obra_') || colaborador.etapaCadastro === 'confirmando_obra_duplicata') {
         colaborador.tempNomeObra = undefined;
         colaborador.tempEnderecoObra = undefined;
@@ -134,6 +139,11 @@ Digite "menu" para continuar ou qualquer outra opção.`,
         colaborador.tempDescricaoTarefa = undefined;
         colaborador.tempPrazoTarefa = undefined;
         colaborador.tempColaboradoresDisponiveis = undefined;
+        
+        // ✅ CORRIGIR: Adicionar novos campos
+        colaborador.tempUnidadesTarefa = undefined;
+        colaborador.tempFaseTarefa = undefined;
+        colaborador.tempPrazoTarefaFinal = undefined;
       } else if (colaborador.etapaCadastro.startsWith('cadastrando_colab_')) {
         colaborador.tempNovoNome = undefined;
         colaborador.tempNovoTelefone = undefined;
@@ -141,6 +151,12 @@ Digite "menu" para continuar ou qualquer outra opção.`,
         colaborador.tempNovoFuncao = undefined;
       } else if (colaborador.etapaCadastro.startsWith('relatando_problema_')) {
         colaborador.tempDescricaoProblema = undefined;
+      } else if (colaborador.etapaCadastro === 'gerenciando_tarefa_ativa') {
+        // ✅ NOVO: Limpeza para gerenciamento de tarefa
+        colaborador.tempTarefaSelecionadaId = undefined;
+      } else if (colaborador.etapaCadastro === 'selecionando_minha_tarefa') {
+        // ✅ NOVO: Limpeza para seleção de tarefa
+        colaborador.tempTarefasIds = undefined;
       }
       
       // Salvar as alterações
@@ -250,7 +266,7 @@ O que você deseja fazer hoje?
   // ===== PROCESSAMENTO DOS ESTADOS ESPECÍFICOS =====
   
   switch (colaborador.etapaCadastro) {
-    // ✅ NOVO ESTADO PARA COLETAR NOME
+    // ✅ ESTADO PARA COLETAR NOME
     case 'coletando_nome':
       if (!mensagemTexto || mensagemTexto.trim().length < 2) {
         return {
@@ -384,13 +400,22 @@ ${saudacao} Conte-nos o que está acontecendo.
     case 'ver_tarefa_detalhe':
       return await estadoVerTarefaDetalhe(colaborador, mensagemTexto);
 
-      case 'criando_tarefa_titulo':
-        case 'criando_tarefa_descricao':
-        case 'criando_tarefa_prazo':
-        case 'criando_tarefa_atribuicao':
-        case 'criando_tarefa_unidades':   
-        case 'criando_tarefa_fase': 
-          return await estadoCriandoTarefa(colaborador, mensagemTexto);
+    // ✅ NOVO ESTADO: GERENCIANDO TAREFA ATIVA
+    case 'gerenciando_tarefa_ativa':
+      return await estadoGerenciandoTarefa(colaborador, mensagemTexto);
+
+    // ✅ NOVO ESTADO: SELECIONANDO MINHA TAREFA
+    case 'selecionando_minha_tarefa':
+      return await estadoSelecionandoMinhaTarefa(colaborador, mensagemTexto);
+
+    case 'criando_tarefa_titulo':
+    case 'criando_tarefa_descricao':
+    case 'criando_tarefa_prazo':
+    case 'criando_tarefa_atribuicao':
+    case 'criando_tarefa_unidades':   
+    case 'criando_tarefa_fase':
+    case 'criando_tarefa_confirmacao': // ✅ ESTADO ATUALIZADO
+      return await estadoCriandoTarefa(colaborador, mensagemTexto);
 
     // ===== ESTADOS DE COLABORADORES =====
     case 'cadastrando_colab_nome':
