@@ -8,7 +8,7 @@ const { uploadImageToS3 } = require('../../services/s3.service'); // Mantemos is
  * Cria um novo problema com ou sem foto
  */
 async function criarProblema(dados) {
-  const { obraId, relatorId, descricao, fotoBuffer, fotoUrl } = dados;
+  const { obraId, relatorId, tarefaId, descricao, fotoBuffer, fotoUrl } = dados;
   
   // Verificar se o relator existe
   console.log('🔍 Verificando relator com ID:', relatorId);
@@ -38,6 +38,7 @@ async function criarProblema(dados) {
   const problema = new Problema({
     obra: obraId,
     relator: relatorId,
+    tarefa: tarefaId,
     descricao,
     fotoUrl: urlFinal,
     fotoPublicId: publicIdFinal
